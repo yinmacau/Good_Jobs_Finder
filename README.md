@@ -1,383 +1,62 @@
-# Career Flow
+# NPE Get Jobs · 个人智能求职流水线
 
-**说出你想找的工作，剩下的筛选、整理和匹配交给我。**
+**每天自动找岗位、比对简历、写好招呼语并批量投递——你要做的只有扫码登录和看结果。**
 
-Career Flow 是一个运行在你自己电脑上的求职伙伴。你不用研究招聘网站的复杂筛选项，只需要用一句话说清楚岗位、城市、薪资和不想要的机会。它会帮你登录招聘平台、找到岗位、整理信息、排除不合适的机会，再把真正值得判断的岗位带回来。
+这是一个运行在自己电脑上的自动化求职助手，主攻 BOSS 直聘。它把「搜岗位 → 读 JD → 比对简历 → 写招呼语 → 逐个打招呼」这条每天要花几小时的重复流程，压缩成一句启动命令和两个系统定时任务。
 
-![Career Flow 根据自然语言理解岗位目标，并展示筛选出的候选岗位](docs/images/readme/career-workspace.jpg)
+## 它能做什么
 
-它不是失控的“海投机器人”。搜索、采集和匹配默认不会联系招聘方；是否打开沟通窗口、是否发送消息，最终都由你确认。
-
-> 当前 BOSS 直聘主链已经过真实页面验证。猎聘、前程无忧和智联招聘正在按顺序迁移，项目仍处于持续完善阶段。
-
-## 快速导航
-
-- [它能帮你做什么](#它能帮你做什么)
-- [真实产品画面](#真实产品画面)
-- [当前进度](#当前进度)
-- [它怎么陪你找工作](#它怎么陪你找工作)
-- [架构概览](#架构概览)
-- [环境要求](#环境要求)
-- [快速启动](#快速启动)
-- [本地开发](#本地开发)
-- [配置说明](#配置说明)
-- [安全与副作用边界](#安全与副作用边界)
-- [项目结构](#项目结构)
-- [主要接口](#主要接口)
-- [验证与测试](#验证与测试)
-- [定时流水线](#定时流水线windows-任务计划程序)
-- [已知边界](#已知边界)
-
----
-
-## 它能帮你做什么
-
-| 找工作时最消耗精力的事 | Career Flow 的处理方式 |
+| 能力 | 说明 |
 |---|---|
-| 每个平台重复填写岗位、城市和薪资 | 直接理解一句自然语言目标，再映射到不同平台 |
-| 岗位太多，来回翻页后记不住 | 自动登记成岗位库，去重并保留公司、地点、经验等事实 |
-| 外包、销售、驻场等岗位反复出现 | 按你的排除词、薪资边界和长期偏好再次过滤 |
-| 看完职位描述仍不知道是否值得投 | 结合候选人画像和岗位信息给出匹配判断 |
-| 担心自动化误发消息 | 默认停在候选确认；沟通准备不填写、不发送 |
-| 换平台后又要重新配置 | 画像、规则和目标条件跨平台复用，平台只负责执行 |
+| 智能岗位发现 | 按预设方向（AI 产品评测、大模型评测、AI 产品经理等 14 个方向）轮询搜索，也支持让 AI 读简历自动生成搜索方向；标题模糊匹配 + 每页停留滑动，降低风控概率 |
+| 简历匹配打分 | 调用 DeepSeek 逐岗比对简历与 JD，输出 0-100 匹配分和投递建议，低于 60 分自动跳过并留档低分原因 |
+| 个性化招呼语 | 结合简历技术栈与岗位任职要求，为每个岗位单独生成打招呼内容，不是模板群发 |
+| 批量自动投递 | 自动排除实习生、4 年+ 年限岗位；已投递/已沟通过的岗位在去重库中永久跳过，绝不重复打扰 |
+| 定时流水线 | Windows 任务计划程序驱动：早 9:00 投递（不满 80 个自动补跑发现+匹配+投递），晚 20:00 发现+匹配为次日备池 |
+| 风控与熔断保护 | 投递间隔随机抖动、方向间随机冷却；连续失败 2 个立即熔断停止，人工介入后重跑自动续投 |
+| 全程留档 | 投递记录、低分岗位、每轮统计全部落盘，随时可追溯 |
 
-你只需要做三件事：描述目标、完成平台扫码、确认真正想沟通的岗位。
+## 一天是怎么运转的
 
----
-
-## 真实产品画面
-
-### 1. 先说人话，不填复杂表单
-
-README 首屏就是一次真实运行：输入“广州 25–40K、至少 5 年经验、优先电商或供应链、不要外包和销售”这样的自然语言，系统会保存原文，并拆成职位、城市、薪资、经验、行业、技能和排除项。平台未登录时，当前页面直接给出扫码入口，不会让任务偷偷继续。
-
-### 2. 找到的岗位不会刷完就丢
-
-搜索和滚动加载到的岗位会进入统一岗位库。你可以按平台、状态、岗位或公司筛选，集中回看哪些岗位待判断、已过滤、待联系或已经处理。
-
-![岗位库集中展示 BOSS 直聘采集到的真实岗位](docs/images/readme/job-library.jpg)
-
-### 3. 它会越来越懂你的边界
-
-候选人画像、筛选边界、企业判断和简历表达都属于你自己的长期求职资产。它们不会固化在某个平台，也不会未经确认发送给招聘方。
-
-![求职资产统一维护候选人画像、筛选边界、判断规则和简历表达](docs/images/readme/career-assets.jpg)
-
----
-
-## 当前进度
-
----
-
-平台适配器已进入统一注册表，但“已注册”不等于“已完成真实页面回归”。
-
-| 平台 | 插件注册 | 登录会话 | 岗位发现 | 滚动增量 | 沟通准备 | 真实回归状态 |
-|---|:---:|:---:|:---:|:---:|:---:|---|
-| BOSS 直聘 | 已完成 | 已完成 | 已完成 | 已完成 | 已完成 | 已验证搜索、登记、筛选、匹配和无副作用沟通准备 |
-| 猎聘 | 已完成 | 已接线 | 已接线 | 已接线 | 已接线 | 待按真实页面逐动作迁移和回归 |
-| 前程无忧 | 已完成 | 已接线 | 已接线 | 已接线 | 已接线 | 待按真实页面逐动作迁移和回归 |
-| 智联招聘 | 已完成 | 已接线 | 已接线 | 已接线 | 已接线 | 待按真实页面逐动作迁移和回归 |
-
-BOSS 直聘当前以岗位搜索或推荐接口响应作为岗位数据主源。DOM 只负责触发页面行为，并在接口数据不可用时提供降级判断。已验证一次搜索批次和一次滚动批次可以完成岗位去重、登记、筛选与匹配，工作流在联系前停止等待用户确认。
-
----
-
-## 它怎么陪你找工作
-
-1. **说出目标**：像和朋友聊天一样描述岗位、地点、薪资、经验和排除项。
-2. **扫码登录**：选择招聘平台；未登录时打开真实平台页面，由你亲自扫码。
-3. **寻找机会**：系统搜索岗位并滚动加载，把平台信息整理成统一格式。
-4. **替你初筛**：先执行确定性过滤，再结合你的画像做匹配判断。
-5. **把决定交给你**：候选岗位集中展示，只有你确认后才准备沟通。
-6. **安全地继续**：沟通准备只检查聊天入口；发送消息仍需单独明确确认。
-
-未登录、登录状态无法确认、浏览器服务不可用或用户尚未确认时，工作流必须停止，不得将失败伪装成成功。
-
----
-
-## 架构概览
-
-```mermaid
-flowchart LR
-    USER["求职者"] --> UI["Vue 3 单页工作台"]
-    UI --> API["Spring Boot 招聘 API"]
-    API --> WORKFLOW["招聘工作流"]
-    WORKFLOW --> DATABASE["SQLite 岗位与目标数据"]
-    WORKFLOW --> AI["AI 匹配适配器"]
-    WORKFLOW --> PORT["浏览器自动化端口"]
-    PORT --> SIDECAR["Node.js Patchright sidecar"]
-    SIDECAR --> PLUGINS["平台动作插件"]
-    PLUGINS --> SITES["BOSS 猎聘 前程无忧 智联"]
+```
+20:00  岗位发现（方向轮换）→ 简历匹配打分 → 生成招呼语 → 更新投递池
+09:00  刷新 BOSS 登录 → 按匹配分从高到低批量投递
+       └── 当日不足 80 个？→ 冷却 5-10 分钟 → 发现新岗位 → 匹配 → 继续投
 ```
 
-核心原则：
+所有过程写入 `logs/schedule_pipeline.log`，每天回来一句话就能拿到汇总：投了几个、成功多少、失败原因是什么。
 
-- Java 侧定义稳定的平台 SPI、工作流、持久化和 HTTP 契约。
-- Node sidecar 负责浏览器生命周期与 Patchright 动作，不让平台选择器泄漏到业务层。
-- 每个平台独立维护登录判断、搜索、采集、滚动和联系动作。
-- 前端通过 Feature Manifest 组合路由，在同一工作台内切换平台、岗位库和求职资产。
-- 平台差异只能在适配器中处理；通用岗位条件和岗位事实不能保存平台枚举码。
-
----
-
-## 环境要求
-
-| 依赖 | 要求 | 用途 |
-|---|---|---|
-| JDK | 21 | 编译并运行 Spring Boot |
-| Maven | 本机可执行 `mvn` | 测试、前端生产构建和 JAR 打包 |
-| Node.js | 20 或更高 | Patchright sidecar和前端本地开发 |
-| Google Chrome | 本机已安装 | Patchright 使用 `channel: chrome` 启动持久会话 |
-| npm | 随 Node.js 安装 | 安装 sidecar 和前端依赖 |
-
-默认端口：
-
-| 服务 | 地址 |
-|---|---|
-| 打包后的应用 | `http://127.0.0.1:8081` |
-| Vite 开发服务器 | `http://127.0.0.1:5174` |
-| Patchright sidecar | `http://127.0.0.1:17321` |
-
----
-
-## 快速启动
-
-以下命令均在仓库根目录执行。
-
-### 1. 创建本机配置
-
-Windows PowerShell：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-macOS 或 Linux：
+## 快速开始
 
 ```bash
-cp .env.example .env
-```
-
-只填写实际使用的 AI 服务。`.env` 已被 Git 忽略，不要提交真实密钥。
-
-### 2. 安装 Patchright sidecar 依赖
-
-```bash
-npm ci --prefix node-services/recruitment-browser
-```
-
-### 3. 构建可执行应用
-
-```bash
-mvn clean package
-```
-
-Maven 会安装前端依赖、构建 Vue 应用，并将 `frontend/dist` 打入 Spring Boot JAR。
-
-### 4. 启动应用
-
-Windows：
-
-```powershell
+# 1. 启动 Java 后端 + Patchright sidecar（需 JDK 21、Node 20+、本机 Chrome）
 .\scripts\start.bat
+
+# 2. 首次使用：扫码登录 BOSS（登录态长期保存）
+python login_boss.py
+
+# 3. 手动跑一轮完整流程
+python job_discovery.py        # 发现岗位
+python resume_matcher.py       # 简历匹配 + 生成招呼语
+python run_contact_sender.py   # 批量投递
+
+# 或直接交给定时任务（推荐）
+scripts\run_morning.bat        # 投递流水线
+scripts\run_evening.bat        # 发现 + 匹配流水线
 ```
 
-macOS 或 Linux：
+## 技术栈
 
-```bash
-chmod +x scripts/start.sh
-./scripts/start.sh
-```
+- **后端**：Spring Boot（Java 21）+ Patchright sidecar（Node.js，驱动本机 Chrome 持久会话）
+- **流水线**：Python（urllib 无额外依赖）+ DeepSeek API（简历匹配、招呼语生成）
+- **调度**：Windows 任务计划程序（`scripts/scheduled_pipeline.py` 统一驱动）
 
-应用启动时会自动拉起 Patchright sidecar。浏览器访问 `http://127.0.0.1:8081` 即可进入求职工作台，不需要额外的系统账号登录。
+## 安全与边界
 
-首次使用某个平台时，在工作台点击“打开登录”，在平台页面中完成扫码。平台登录状态是搜索、匹配和联系流程的前置条件。
-
----
-
-## 本地开发
-
-安装依赖：
-
-```bash
-npm ci --prefix node-services/recruitment-browser
-npm ci --prefix frontend
-```
-
-启动 Spring Boot；它会自动启动 sidecar：
-
-```bash
-mvn spring-boot:run
-```
-
-另开终端启动前端：
-
-```bash
-npm run dev --prefix frontend -- --host 127.0.0.1 --port 5174
-```
-
-开发时访问 `http://127.0.0.1:5174/workspace`。Vite 会将 `/api` 和 `/dicts` 请求代理到 `http://127.0.0.1:8081`。
-
-如果需要独立调试 sidecar，应先将 `recruitment.browser.auto-start` 设为 `false`，再执行：
-
-```bash
-npm start --prefix node-services/recruitment-browser
-```
-
----
-
-## 配置说明
-
-仓库只保存无密钥模板 `.env.example`。本机 `.env` 会由 `application.yml` 作为可选配置导入；部署环境也可以直接注入同名系统环境变量。
-
-| 配置 | 必填 | 默认值 | 说明 |
-|---|:---:|---|---|
-| `OPENAI_API_KEY` | 否 | 空 | OpenAI 密钥 |
-| `OPENAI_BASE_URL` | 否 | `https://api.openai.com` | OpenAI 兼容地址 |
-| `OPENAI_MODEL` | 否 | `gpt-4o` | OpenAI 模型 |
-| `DEEPSEEK_API_KEY` | 否 | 空 | DeepSeek 密钥 |
-| `DEEPSEEK_BASE_URL` | 否 | `https://api.deepseek.com` | DeepSeek 地址 |
-| `DEEPSEEK_MODEL` | 否 | `deepseek-chat` | DeepSeek 模型 |
-| `QWEN_API_KEY` | 否 | 空 | 通义千问密钥 |
-| `QWEN_BASE_URL` | 否 | DashScope 兼容地址 | 通义千问地址 |
-| `QWEN_MODEL` | 否 | `qwen-plus` | 通义千问模型 |
-| `HTTP_PROXY_HOST` | 否 | 空 | AI 请求使用的本地 HTTP 代理主机 |
-| `HTTP_PROXY_PORT` | 否 | `0` | AI 请求使用的本地 HTTP 代理端口 |
-| `RECRUITMENT_BROWSER_BASE_URL` | 否 | `http://127.0.0.1:17321` | Spring Boot 连接 sidecar 的地址 |
-| `NPE_PATCHRIGHT_PORT` | 否 | `17321` | sidecar 监听端口 |
-| `NPE_BROWSER_PROFILE_ROOT` | 否 | sidecar 下的 `.profiles` | 平台持久浏览器会话目录 |
-
-至少配置一个 AI 提供商后，AI 匹配和目标解释才能使用对应模型。没有密钥时，浏览器会话、确定性岗位采集和规则过滤仍可独立运行，但依赖 AI 的步骤会受到限制。
-
----
-
-## 安全与副作用边界
-
-- `.env`、浏览器登录资料和本地数据库均不得提交到 Git。
-- 浏览器资料默认保存在 `node-services/recruitment-browser/.profiles/`，其中可能包含有效登录态。
-- SQLite 数据库默认位于 `${user.home}/getjobs/npe_get_jobs.db`。
-- 搜索、采集、滚动、岗位检查和沟通准备必须返回 `sideEffect: false`。
-- 发送联系动作要求调用方明确传入 `confirmContact: true`；否则返回 `CONTACT_CONFIRMATION_REQUIRED`，联系数量为零。
-- 工作流启动前和平台导航后都要重新检查登录状态，无法确认时按未登录处理。
-- 平台出现验证码、风控、页面异常或超时时应停止并交还用户处理，不进行高频重试。
-
-调试真实平台时，优先使用搜索、采集、筛选和沟通准备动作。不要在回归测试中调用确认发送接口。
-
----
-
-## 项目结构
-
-```text
-npe_get_jobs/
-├── frontend/                                  Vue 3 单页求职工作台
-│   └── src/features/                          工作台、岗位库、平台配置和求职资产
-├── node-services/recruitment-browser/         Patchright sidecar
-│   └── src/platforms/                         BOSS、猎聘、前程无忧、智联平台动作
-├── src/main/java/getjobs/modules/recruitment/ 招聘领域、工作流、SPI、适配器和接口
-├── src/main/resources/                        Spring Boot 与 AI 配置
-├── scripts/                                   Windows 和 Unix 启动脚本
-├── .env.example                               无密钥本地配置模板
-└── pom.xml                                    Java、前端构建与打包入口
-```
-
-职责边界：
-
-- `domain`：平台能力、岗位、目标和工作流状态等稳定业务概念。
-- `application` 与 `workflow`：岗位登记、筛选、匹配和联系确认的用例编排。
-- `spi`：平台插件对业务层暴露的稳定端口。
-- `platform`：Java 侧平台注册和 Patchright 适配。
-- `browser`：sidecar 生命周期和 HTTP 客户端。
-- `web`：对前端暴露招聘 HTTP API。
-- `node-services/.../platforms`：真实站点 URL、接口响应解析、选择器和页面动作。
-
----
-
-## 主要接口
-
-| 方法 | 路径 | 作用 |
-|---|---|---|
-| `GET` | `/api/recruitment/browser/health` | 查询 Patchright sidecar 健康状态 |
-| `GET` | `/api/recruitment/platforms` | 查询已注册平台及能力 |
-| `POST` | `/api/recruitment/platforms/{platform}/sessions/open` | 打开或复用平台持久会话 |
-| `GET` | `/api/recruitment/platforms/{platform}/sessions/{sessionId}/status` | 查询平台实际登录状态 |
-| `POST` | `/api/recruitment/goals/interpret` | 解释并保存自然语言岗位目标 |
-| `GET` | `/api/recruitment/goals/active` | 查询当前激活的岗位目标 |
-| `POST` | `/api/recruitment/workflows` | 在登录校验通过后启动岗位工作流 |
-| `GET` | `/api/recruitment/workflows/{taskId}` | 查询运行状态、阶段和候选岗位 |
-| `POST` | `/api/recruitment/workflows/{taskId}/contact/prepare` | 无副作用地检查沟通入口和编辑器 |
-| `POST` | `/api/recruitment/workflows/{taskId}/contact` | 在显式确认后执行联系动作 |
-
-sidecar 只监听本机回环地址，提供 `/health`、`/v1/sessions` 和 `/v1/actions`。业务前端不应绕过 Spring Boot 直接调用 sidecar。
-
----
-
-## 验证与测试
-
-```bash
-# 后端测试
-mvn test
-
-# Patchright 平台动作契约测试
-npm test --prefix node-services/recruitment-browser
-
-# 前端生产构建
-npm run build --prefix frontend
-
-# 完整打包
-mvn clean package
-```
-
-运行后可检查浏览器服务：
-
-```bash
-curl http://127.0.0.1:8081/api/recruitment/browser/health
-```
-
-真实平台回归应遵守以下顺序：登录检查、岗位搜索、初始采集、单次滚动、增量登记、筛选匹配、沟通准备。除非用户明确要求并确认候选清单，否则不得执行发送动作。
-
----
-
-## 定时流水线（Windows 任务计划程序）
-
-日常「发现 → 匹配 → 投递」已交给 Windows 任务计划程序驱动，不依赖任何外部会话：
-
-| 任务名 | 时间 | 入口 | 行为 |
-| --- | --- | --- | --- |
-| `npe_get_jobs_morning` | 每天 09:00 | `scripts/run_morning.bat` | 检查/拉起后端 → 刷新 BOSS 登录 → 批量投递；当天成功数不足 80 时，自动循环「冷却 5-10 分钟 → job_discovery 发现新岗位 → resume_matcher 匹配生成招呼语 → 再投递」，直到达标、岗位池枯竭、触发熔断或超过轮数上限（首轮 + 4 轮补足） |
-| `npe_get_jobs_evening` | 每天 20:00 | `scripts/run_evening.bat` | 检查/拉起后端 → 刷新登录 → 岗位发现 + 简历匹配，为次日准备岗位池 |
-
-核心驱动是 `scripts/scheduled_pipeline.py`，可用参数 `--target`（当日成功目标，默认 80）、`--max-extra-rounds`（补足轮数，默认 4）。
-
-管理命令：
-
-```bat
-# 查看
-schtasks /query /tn npe_get_jobs_morning
-# 手动补跑（登录过期扫码后）
-C:\Users\YHR\npe_get_jobs\scripts\run_morning.bat
-# 删除
-schtasks /delete /tn npe_get_jobs_morning /f
-```
-
-注意：
-
-- 电脑需在任务时间点处于开机且已登录状态（浏览器自动化需要图形界面），睡眠中不会执行。
-- BOSS 登录态过期需扫码时，流水线会记录日志并终止；人工扫码后双击对应 .bat 即可补跑，已投递岗位自动去重。
-- 全部统计与每轮明细追加在 `logs/schedule_pipeline.log`，可直接查看或交给 AI 汇总。
-
----
-
-## 已知边界
-
-- 招聘网站会持续调整接口、DOM 和风控策略，平台插件需要以真实页面回归结果为准。
-- BOSS 直聘已完成当前页面版本的主链验证，但登录过期、验证码和站点变化仍可能中断运行。
-- 猎聘、前程无忧和智联招聘目前只完成统一契约接线，尚未声明真实端到端可用。
-- 当前 sidecar 依赖本机 Google Chrome，并以有头持久会话承载扫码登录和风控恢复。
-- 前端生产包仍包含部分体积较大的历史依赖；后续会随旧页面移除继续收敛。
-- 项目不会承诺无人值守的高频自动投递，也不会尝试绕过招聘平台限制。
-
----
+- 只在自己电脑、自己的招聘账号上运行；登录态与浏览器 Profile 均保存在本地
+- 已沟通岗位自动跳过，不重复骚扰招聘方；触发平台风控时熔断停止，由人工接管
+- 使用者需自行承担账号安全与平台规则风险，请合理控制投递频率
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE)。使用者需要自行承担账号安全、平台规则、数据保护和操作后果。
+基于 [npe_get_jobs](https://github.com/exception-coder/npe_get_jobs)（MIT）二次开发。
