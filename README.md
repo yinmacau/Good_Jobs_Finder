@@ -25,6 +25,7 @@ Career Flow 是一个运行在你自己电脑上的求职伙伴。你不用研�
 - [项目结构](#项目结构)
 - [主要接口](#主要接口)
 - [验证与测试](#验证与测试)
+- [定时流水线](#定时流水线windows-任务计划程序)
 - [已知边界](#已知边界)
 
 ---
@@ -333,6 +334,36 @@ curl http://127.0.0.1:8081/api/recruitment/browser/health
 ```
 
 真实平台回归应遵守以下顺序：登录检查、岗位搜索、初始采集、单次滚动、增量登记、筛选匹配、沟通准备。除非用户明确要求并确认候选清单，否则不得执行发送动作。
+
+---
+
+## 定时流水线（Windows 任务计划程序）
+
+日常「发现 → 匹配 → 投递」已交给 Windows 任务计划程序驱动，不依赖任何外部会话：
+
+| 任务名 | 时间 | 入口 | 行为 |
+| --- | --- | --- | --- |
+| `npe_get_jobs_morning` | 每天 09:00 | `scripts/run_morning.bat` | 检查/拉起后端 → 刷新 BOSS 登录 → 批量投递；当天成功数不足 80 时，自动循环「冷却 5-10 分钟 → job_discovery 发现新岗位 → resume_matcher 匹配生成招呼语 → 再投递」，直到达标、岗位池枯竭、触发熔断或超过轮数上限（首轮 + 4 轮补足） |
+| `npe_get_jobs_evening` | 每天 20:00 | `scripts/run_evening.bat` | 检查/拉起后端 → 刷新登录 → 岗位发现 + 简历匹配，为次日准备岗位池 |
+
+核心驱动是 `scripts/scheduled_pipeline.py`，可用参数 `--target`（当日成功目标，默认 80）、`--max-extra-rounds`（补足轮数，默认 4）。
+
+管理命令：
+
+```bat
+# 查看
+schtasks /query /tn npe_get_jobs_morning
+# 手动补跑（登录过期扫码后）
+C:\Users\YHR\npe_get_jobs\scripts\run_morning.bat
+# 删除
+schtasks /delete /tn npe_get_jobs_morning /f
+```
+
+注意：
+
+- 电脑需在任务时间点处于开机且已登录状态（浏览器自动化需要图形界面），睡眠中不会执行。
+- BOSS 登录态过期需扫码时，流水线会记录日志并终止；人工扫码后双击对应 .bat 即可补跑，已投递岗位自动去重。
+- 全部统计与每轮明细追加在 `logs/schedule_pipeline.log`，可直接查看或交给 AI 汇总。
 
 ---
 

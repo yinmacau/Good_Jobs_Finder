@@ -2,6 +2,12 @@ import { clickFirst, createRecruitmentActions, idFromUrl, queryString, readCard 
 
 const RESULT_TIMEOUT = 15_000;
 const SCROLL_SETTLE_MS = 1_500;
+// 每个搜索最多翻页数（首页 + N 次滚动），限制单方向的操作量，降低风控风险
+const MAX_SCROLL_PAGES = 3;
+// 模拟真人浏览的停留时长范围（毫秒），实际取值随机
+const MIN_STAY_MS = 8_000;
+const MAX_STAY_MS = 15_000;
+const randomStayMs = () => Math.floor(MIN_STAY_MS + Math.random() * (MAX_STAY_MS - MIN_STAY_MS));
 const LOGIN_SELECTOR = [
   'a.header-login-btn',
   'a[href="/web/user/"]',
@@ -16,6 +22,21 @@ const AUTHENTICATED_SELECTOR = [
 
 export const decodeBossText = (value = '') => value.replace(/[\uE031-\uE03A]/g,
   (character) => String(character.codePointAt(0) - 0xE031));
+
+// BOSS 详情页偶发 45s 导航超时（风控/加载慢），重试 3 次兜底
+const gotoWithRetry = async (page, url, { attempts = 3 } = {}) => {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await page.waitForTimeout(2_000);
+    }
+  }
+  throw lastError;
+};
 
 const BOSS_JOB_API_PATHS = [
   '/wapi/zpgeek/search/joblist.json',
@@ -97,6 +118,83 @@ const jobCards = async (page) => {
   return page.locator('ul.rec-job-list li.job-card-box, .job-list-container li.job-card-box');
 };
 
+const BOSS_EDITOR_SELECTORS = [
+  '#chat-input',
+  '.chat-input',
+  '.editor-content',
+  '[contenteditable="true"]',
+  'textarea.input-area',
+  '.input-area',
+  'textarea[placeholder*="打招呼"]',
+  'textarea[placeholder*="输入"]',
+  'textarea[placeholder*="内容"]',
+  'textarea[placeholder*="聊"]',
+  '[placeholder*="沟通"]',
+];
+
+// 在 page 的所有 frame（含 iframe）里找第一个可见的聊天编辑器
+const findEditorInPage = async (targetPage) => {
+  for (const frame of targetPage.frames()) {
+    for (const selector of BOSS_EDITOR_SELECTORS) {
+      const candidate = frame.locator(selector).first();
+      if (await candidate.isVisible().catch(() => false)) return { editor: candidate, frame };
+    }
+  }
+  return null;
+};
+
+// 在整个浏览器上下文（所有标签页 × 所有 frame）里找聊天编辑器
+// BOSS 点击「立即沟通」后可能新开标签页，或把 IM 放在 iframe 里
+const findChatEditor = async (page) => {
+  const pages = page.context().pages();
+  for (const targetPage of pages) {
+    const found = await findEditorInPage(targetPage);
+    if (found) return { ...found, page: targetPage };
+  }
+  return null;
+};
+
+// 在 page 的所有 frame 里点击第一个可见的匹配元素
+const clickInFrames = async (targetPage, selectors) => {
+  for (const frame of targetPage.frames()) {
+    for (const selector of selectors) {
+      const target = frame.locator(selector).first();
+      if (await target.isVisible().catch(() => false)) {
+        await target.click().catch(() => false);
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+// 诊断信息：当前所有标签页 URL + 输入类元素的 placeholder/可见性，失败时写入 reason 便于排查
+const editorDiagnostics = async (page) => {
+  const ctx = page.context();
+  const urls = ctx.pages().map((p) => p.url());
+  const dumps = [];
+  for (const p of ctx.pages()) {
+    const dump = await p.evaluate(() => Array.from(document.querySelectorAll('textarea, [contenteditable="true"]'))
+      .map((el) => `${el.tagName}#${el.id}.${String(el.className).slice(0, 30)} ph="${el.getAttribute('placeholder') || ''}" visible=${!!el.offsetParent}`)).catch(() => []);
+    dumps.push(...dump.slice(0, 5));
+  }
+  return `urls=${JSON.stringify(urls)} inputs=${JSON.stringify(dumps.slice(0, 10))}`;
+};
+
+// 发送完成后关闭聊天对话框：新开的标签页直接关掉；同页内联面板找关闭按钮，找不到按 Esc
+const closeChatDialog = async (page, chatPage) => {
+  try {
+    if (chatPage && chatPage !== page) {
+      await chatPage.close().catch(() => {});
+      return;
+    }
+    const closed = await clickInFrames(page, ['.chat-close-btn', '.im-close', '.close-chat', '[ka="im-close"]', '.chat-close', '.dialog-close', '.icon-close']);
+    if (!closed) await page.keyboard.press('Escape').catch(() => {});
+  } catch {
+    // 关闭失败不影响主流程
+  }
+};
+
 const definition = {
   card: 'li.job-card-wrapper, ul.rec-job-list li.job-card-box, .job-list-container li.job-card-box',
   fields: {
@@ -125,6 +223,7 @@ const definition = {
     if (!(await definition.authenticated(page))) throw new Error('AUTHENTICATION_REQUIRED');
     const monitor = ensureResponseMonitor(page, state);
     monitor.batches.length = 0;
+    monitor.scrollCount = 0; // 新搜索重置翻页计数
     const search = input.search || { keyword: '', cityCode: '' };
     const searchUrl = definition.buildSearchUrl(search, input.filters || {});
     if (monitor.searchUrl !== searchUrl) monitor.cache.clear();
@@ -142,6 +241,17 @@ const definition = {
     await page.locator(definition.card).first()
       .waitFor({ state: 'visible', timeout: RESULT_TIMEOUT })
       .catch(() => null);
+
+    // 初始页面加载后停留一段时间（8-15 秒随机），并缓慢向下滚动，模拟真人浏览
+    const initialStayMs = randomStayMs();
+    const scrollSteps = 4;
+    const stepDelayMs = Math.floor(initialStayMs / scrollSteps);
+    const stepDistance = 600;
+    for (let step = 0; step < scrollSteps; step += 1) {
+      await page.evaluate((distance) => window.scrollBy({ top: distance, behavior: 'auto' }), stepDistance);
+      await page.waitForTimeout(stepDelayMs);
+    }
+
     return { searchUrl, currentUrl: page.url(), responseCapture: true, sideEffect: false };
   },
   collectVisibleJobs: async (page, input = {}, { state }) => {
@@ -183,10 +293,35 @@ const definition = {
     const cursorBefore = before > 0
       ? await cards.nth(before - 1).locator('a[href*="/job_detail/"]').first().getAttribute('href').catch(() => null)
       : null;
-    if (before > 0) await cards.nth(before - 1).scrollIntoViewIfNeeded().catch(() => null);
-    await page.evaluate((distance) => window.scrollBy({ top: distance, behavior: 'auto' }),
-      Math.min(Math.max(Number(input.distance ?? 640), 240), 1_000));
-    await page.waitForTimeout(input.waitMs ?? SCROLL_SETTLE_MS);
+
+    // 翻页上限：超过 MAX_SCROLL_PAGES 后假装没有更多数据，结束本方向的翻页
+    monitor.scrollCount = (monitor.scrollCount ?? 0) + 1;
+    if (monitor.scrollCount > MAX_SCROLL_PAGES) {
+      return {
+        before,
+        after: before,
+        loaded: 0,
+        cursorBefore,
+        cursorAfter: cursorBefore,
+        changed: false,
+        apiResponses: 0,
+        hasMore: false,
+        sideEffect: false,
+      };
+    }
+
+    // 每个页面停留一段时间（8-15 秒随机），期间分多次向下滚动，模拟真人浏览
+    const minPageStayMs = randomStayMs();
+    const scrollSteps = 4;
+    const stepDelayMs = Math.floor(minPageStayMs / scrollSteps);
+    const stepDistance = Math.min(Math.max(Number(input.distance ?? 640), 240), 1_000);
+
+    for (let step = 0; step < scrollSteps; step += 1) {
+      if (before > 0) await cards.nth(Math.min(before - 1, step * 2)).scrollIntoViewIfNeeded().catch(() => null);
+      await page.evaluate((distance) => window.scrollBy({ top: distance, behavior: 'auto' }), stepDistance);
+      await page.waitForTimeout(stepDelayMs);
+    }
+
     const after = await cards.count();
     const cursorAfter = after > 0
       ? await cards.nth(after - 1).locator('a[href*="/job_detail/"]').first().getAttribute('href').catch(() => null)
@@ -232,7 +367,7 @@ const definition = {
     return { available: true, roots, fields, sideEffect: false };
   },
   prepareContact: async (page, job) => {
-    await page.goto(job.href, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await gotoWithRetry(page, job.href);
     const contactActionVisible = await page.locator('a.btn.btn-startchat').first().isVisible().catch(() => false);
     const editorVisible = await page.locator('#chat-input').first().isVisible().catch(() => false);
     return {
@@ -245,15 +380,76 @@ const definition = {
     };
   },
   sendContact: async (page, job, input) => {
-    await page.goto(job.href, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-    const clicked = await clickFirst(page, ['a.btn.btn-startchat']);
+    await gotoWithRetry(page, job.href);
+
+    // 已沟通过的岗位详情页显示「继续沟通」而非「立即沟通」：
+    // 视为已投递，直接跳过（不再发第二条招呼语，也不计入失败次数）
+    const alreadyContacted = await clickFirst(page, ['a:has-text("继续沟通")', 'button:has-text("继续沟通")', '.btn-continue']);
+    if (alreadyContacted) {
+      return { platformJobId: job.platformJobId, status: 'SKIPPED', reason: 'ALREADY_CONTACTED' };
+    }
+
+    const clicked = await clickFirst(page, ['a.btn.btn-startchat', '.btn-startchat', '[ka="job-detail-chat-btn"]']);
     if (!clicked) return { platformJobId: job.platformJobId, status: 'SKIPPED', reason: 'CONTACT_ACTION_UNAVAILABLE' };
+
     if (input.greeting) {
-      const editor = page.locator('#chat-input').first();
-      if (await editor.isVisible().catch(() => false)) {
-        await editor.fill(input.greeting);
-        await clickFirst(page, ['button[type="send"]']);
+      // BOSS 点击「立即沟通」后可能新开标签页或弹出浮层，最多等 20 秒，
+      // 并跨标签页/iframe 搜索聊天编辑器
+      let found = null;
+      for (let attempt = 0; attempt < 40 && !found; attempt += 1) {
+        found = await findChatEditor(page);
+        if (!found) {
+          // 第 5 秒还没出聊天框，可能是第一次点击没生效（被弹层拦截），补点一次
+          if (attempt === 10) {
+            await clickFirst(page, ['a.btn.btn-startchat', '.btn-startchat', '[ka="job-detail-chat-btn"]', 'button:has-text("继续沟通")', 'a:has-text("继续沟通")']);
+          }
+          await page.waitForTimeout(500);
+        }
       }
+
+      if (!found) {
+        return {
+          platformJobId: job.platformJobId,
+          status: 'FAILED',
+          reason: `CHAT_EDITOR_NOT_FOUND ${await editorDiagnostics(page)}`,
+        };
+      }
+
+      const { editor, page: chatPage } = found;
+      await editor.fill(input.greeting);
+      await chatPage.waitForTimeout(300);
+
+      // 优先点发送按钮；找不到则回退为在编辑器里按 Enter 发送
+      const sendClicked = await clickInFrames(chatPage, ['button[type="send"]', '.btn-send', '.send-message', 'button:has-text("发送")', '[ka="im-send"]', '.chat-send']);
+      if (!sendClicked) {
+        await editor.press('Enter');
+      }
+
+      await chatPage.waitForTimeout(800);
+
+      // 验证方式 1：编辑器被清空说明已发送
+      const editorCleared = await editor.inputValue().catch(() => '') === ''
+        && await editor.textContent().catch(() => '') === '';
+
+      // 验证方式 2：聊天区域出现包含招呼语的消息
+      let messageVisible = false;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const ownMessage = chatPage.locator('.message-item.self, .message-list .self, .chat-message-list .self, .im-message-list .self, .message-content')
+          .filter({ hasText: input.greeting.slice(0, 16) })
+          .first();
+        if (await ownMessage.isVisible().catch(() => false)) {
+          messageVisible = true;
+          break;
+        }
+        await chatPage.waitForTimeout(400);
+      }
+
+      if (!editorCleared && !messageVisible) {
+        await closeChatDialog(page, chatPage);
+        return { platformJobId: job.platformJobId, status: 'FAILED', reason: 'MESSAGE_NOT_VERIFIED' };
+      }
+      // 发送成功，关闭聊天对话框后再进行下一个岗位的点击
+      await closeChatDialog(page, chatPage);
     }
     return { platformJobId: job.platformJobId, status: 'SUCCEEDED', reason: null };
   },

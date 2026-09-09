@@ -34,6 +34,7 @@ merge_prs.log
 .DS_Store
 cookie.json
 .env
+resume_matcher_config.json
 chromedriver
 *.jpg
 !docs/images/readme/*.jpg
@@ -44,3 +45,17 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 node-services/recruitment-browser/.profiles/
+
+### 求职流水线本机运行数据（含个人投递记录，勿提交） ###
+logs/
+__pycache__/
+contact_results*.json
+ai_eval_jobs.json
+ai_filtered_jobs.json
+ai_filtered_nonoutsourced.json
+ai_matched_jobs.json
+greeting_messages.json
+resume_greeting_messages.json
+resume_matched_jobs.json
+resume_low_score_jobs.json
+discovery_rotation_state.json
